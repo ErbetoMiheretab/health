@@ -1,0 +1,31 @@
+interval: 30                       # seconds, set to 0 for single shot
+timeout: 5                         # seconds for each check
+http_retries: 2                    # requests retry on failure
+ping_count: 3                      # how many ICMP probes per host
+
+hosts:
+  - name: "dns-google"
+    ip: 8.8.8.8
+  - name: "router"
+    ip: 192.168.1.1
+
+urls:
+  - name: "dms"
+    url: http://172.16.26.14:8080/share/page
+    expected_status: [200, 204]
+  - name: "qms"
+    url: http://172.16.26.12:7092/
+    expected_status: [200, 204]
+  - name: "bi"
+    url: http://172.16.26.10:3000/
+    expected_status: [200, 204]
+  - name: "hrms"
+    url: http://172.16.26.12:8003/
+    expected_status: [200, 204]
+  - name: "feedback"
+    url: http://172.16.26.11:4020/forms
+    expected_status: [200, 204]
+  # - name: "self-json"
+  #   url: http://localhost:8080/health
+  #   method: GET
+  #   expected_status: [200, 204]
