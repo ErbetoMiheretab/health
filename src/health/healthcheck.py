@@ -16,8 +16,7 @@ import signal
 from config import load_config
 from logger import setup_logging
 from checks import check_host, check_url
-from prometheus_metrics import start_metrics_server_thread # Renamed to avoid direct execution
-
+from prometheus_metrics import start_metrics_server
 # Setup logging for the main application
 log = logging.getLogger("health")
 
@@ -114,7 +113,7 @@ def main():
 
     if metrics_enabled:
         log.info("Prometheus metrics enabled. Starting metrics server on port %d.", prometheus_port)
-        start_metrics_server_thread(prometheus_port) # Only starts the exposition server
+        start_metrics_server(prometheus_port) # Only starts the exposition server
 
     # Decide operation mode:
     # 1. Single run (if interval is 0 or less)

@@ -1,7 +1,16 @@
-interval: 30                       # seconds, set to 0 for single shot
+#General application settings
+interval: 90                       # seconds, set to 0 for single shot
 timeout: 5                         # seconds for each check
 http_retries: 2                    # requests retry on failure
 ping_count: 3                      # how many ICMP probes per host
+max_workers: 20  
+
+# Logging settings
+log_file_path: "health.jsonl" 
+
+
+# Prometheus metrics settings (only active if METRICS=true environment variable is set)
+prometheus_port: 8000   
 
 hosts:
   - name: "dns-google"
@@ -10,21 +19,33 @@ hosts:
     ip: 192.168.1.1
 
 urls:
-  - name: "dms"
-    url: http://172.16.26.14:8080/share/page
+  - name: "TMA"
+    url: https://portal.tma.infratech.technology
     expected_status: [200, 204]
-  - name: "qms"
-    url: http://172.16.26.12:7092/
+  - name: "dvlca"
+    url: http://10.18.7.142:7118
     expected_status: [200, 204]
-  - name: "bi"
-    url: http://172.16.26.10:3000/
+  - name: "AAHDC"
+    url: http://10.34.126.158
     expected_status: [200, 204]
-  - name: "hrms"
-    url: http://172.16.26.12:8003/
+  - name: "AAHDB"
+    url: https://aahdabuhdms.gov.et/
     expected_status: [200, 204]
-  - name: "feedback"
-    url: http://172.16.26.11:4020/forms
-    expected_status: [200, 204]
+  # - name: "dms"
+  #   url: http://172.16.26.14:8080/share/page
+  #   expected_status: [200, 204]
+  # - name: "qms"
+  #   url: http://172.16.26.12:7092/
+  #   expected_status: [200, 204]
+  # - name: "bi"
+  #   url: http://172.16.26.10:3000/
+  #   expected_status: [200, 204]
+  # - name: "hrms"
+  #   url: http://172.16.26.12:8003/
+  #   expected_status: [200, 204]
+  # - name: "feedback"
+  #   url: http://172.16.26.11:4020/forms
+  #   expected_status: [200, 204]
   # - name: "self-json"
   #   url: http://localhost:8080/health
   #   method: GET
