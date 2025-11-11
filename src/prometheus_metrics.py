@@ -16,6 +16,7 @@ except ImportError:
         "Install with 'pip install prometheus_client' to enable Prometheus metrics."
     )
     # Define dummy classes/functions to prevent NameErrors if import fails
+    # This also ensures start_http_server is not actually callable if client is missing
     class Gauge:
         def __init__(self, *args, **kwargs): pass
         def set(self, *args, **kwargs): pass
@@ -24,104 +25,94 @@ except ImportError:
         def observe(self, *args, **kwargs): pass
     def start_http_server(*args, **kwargs):
         logging.getLogger("health").error("Prometheus client not installed, cannot start HTTP server.")
-
-# Local imports for running checks
-from checks import check_host
-
+        raise RuntimeError("Prometheus client not available.") # Raise to propagate failure
 
 # Setup a local logger for this module
 log = logging.getLogger("health")
 
 # Initialize Prometheus metrics. These are global for the Prometheus client.
-# health_up: Gauge for overall health (1=healthy, 0=down)
-#   Labels: 'name' (name of the check item), 'type' (e.g., 'ping', 'http')
-UP = Gauge("health_up", "1 = healthy, 0 = down", ["name", "type"])
+# health_check_status: Gauge for health (1=healthy, 0=down)
+#   Labels: 'check_name' (name of the check item), 'check_type' (e.g., 'ping', 'http'), 'target' (IP/URL)
+health_check_status = Gauge(
+    "health_check_status", 
+    "Health status of the check (1=up, 0=down)", 
+    ["check_name", "check_type", "target"]
+)
 
-# health_latency_ms: Histogram for latency distribution
-#   Labels: 'name', 'type'
-LATENCY = Histogram("health_latency_ms", "Latency in milliseconds", ["name", "type"])
+# health_check_latency_ms: Histogram for latency distribution
+#   Labels: 'check_name', 'check_type', 'target'
+health_check_latency_ms = Histogram(
+    "health_check_latency_milliseconds", 
+    "Latency of health check in milliseconds", 
+    ["check_name", "check_type", "target"],
+    buckets=[1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, float('inf')]
+)
 
+# health_check_http_status_code: Gauge for HTTP status codes (for HTTP checks)
+#   Labels: 'check_name', 'check_type', 'target'
+health_check_http_status_code = Gauge(
+    "health_check_http_status_code",
+    "HTTP status code returned by HTTP checks",
+    ["check_name", "check_type", "target"]
+)
 
-def update_prometheus_metrics(conf: dict):
+def update_check_metrics(result: dict):
     """
-    Runs all configured health checks and updates the Prometheus metrics.
+    Updates Prometheus gauges and histograms based on a single check result dictionary.
 
     Args:
-        conf (dict): The loaded configuration dictionary.
+        result (dict): A dictionary containing the result of a check from checks.py.
     """
-    log.debug("Updating Prometheus metrics...")
-    
-    # Extract common parameters from configuration
-    timeout = conf["timeout"]
-    http_retries = conf.get("http_retries", 0)
+    check_name = result.get("name")
+    check_type = result.get("type")
+    target = result.get("target")
+    healthy = result.get("healthy")
+    latency = result.get("latency") or result.get("rtt") # Ping uses 'rtt', HTTP uses 'latency'
+    status_code = result.get("status_code")
 
+    if not all([check_name, check_type, target]) is None: # Ensure basic labels exist
+        labels = {"check_name": check_name, "check_type": check_type, "target": target}
 
-    # --- Update metrics for host (ping) checks ---
-    for host_item in conf.get("hosts", []):
-        name = host_item["name"]
-        # Run the check to get the latest status
-        res = check_host(host_item, timeout)
+        # Update status gauge
+        health_check_status.labels(**labels).set(1 if healthy else 0)
+
+        # Update latency histogram
+        if latency is not None and latency >= 0:
+            health_check_latency_ms.labels(**labels).observe(latency)
         
-        # Update 'health_up' gauge
-        UP.labels(name=name, type="ping").set(1 if res["healthy"] else 0)
+        # Update HTTP status code gauge for HTTP checks
+        if check_type == "http" and status_code is not None:
+            health_check_http_status_code.labels(**labels).set(status_code)
         
-        # Update 'health_latency_ms' histogram if RTT is available
-        if res["rtt"] is not None:
-            LATENCY.labels(name=name, type="ping").observe(res["rtt"])
-
-    # --- Update metrics for URL (HTTP/HTTPS) checks ---
-    for url_item in conf.get("urls", []):
-        name = url_item["name"]
-        url = url_item["url"]
-        
-        # Update 'health_up' gauge
-        UP.labels(name=name, type="http").set(1 if res["healthy"] else 0)
-        
-        # Update 'health_latency_ms' histogram if latency is available
-        if res["latency"] is not None:
-            LATENCY.labels(name=name, type="http").observe(res["latency"])
+        log.debug("Prometheus metrics updated for %s '%s' (Target: %s)", check_type, check_name, target)
+    else:
+        log.warning("Skipping Prometheus metric update due to missing required labels in result: %s", result)
 
 
-
-def prometheus_server_loop(conf: dict, port: int):
+def _metrics_server_thread_target(port: int):
     """
-    The main loop for the Prometheus metrics server.
-    It continuously updates metrics at a specified interval.
-
-    Args:
-        conf (dict): The loaded configuration dictionary.
-        port (int): The port on which the Prometheus HTTP server should listen.
+    Target function for the Prometheus HTTP server thread.
     """
-    # Start the Prometheus HTTP server to expose metrics
     try:
         start_http_server(port)
         log.info("Prometheus metrics server started on http://0.0.0.0:%s/metrics", port)
+        # Keep the thread alive, as start_http_server is non-blocking
+        while True:
+            time.sleep(1) 
     except Exception as e:
         log.error("Failed to start Prometheus HTTP server on port %s: %s", port, e, exc_info=True)
-        return # Exit the thread if server cannot start
+        # The main loop will continue without metrics if the server fails to start
 
-    interval = conf.get("interval", 30)
-    if interval <= 0:
-        log.warning("Prometheus metrics interval is %s, using default 30s to prevent busy loop.", interval)
-        interval = 30
 
-    while True:
-        update_prometheus_metrics(conf)
-        log.debug("Prometheus metrics updated. Sleeping for %s seconds...", interval)
-        time.sleep(interval)
-
-def start_metrics_server_thread(conf: dict, port: int = 8000):
+def start_metrics_server(port: int = 8000):
     """
-    Starts the Prometheus metrics server in a separate daemon thread.
-
-    Args:
-        conf (dict): The loaded configuration dictionary.
-        port (int): The port for the Prometheus server. Defaults to 8000.
+    Starts the Prometheus metrics exposition HTTP server in a separate daemon thread.
+    This function only starts the server, it does not run checks or update metrics.
     """
-    if 'start_http_server' not in globals() or start_http_server.__name__ == 'start_http_server':
-        # Only try to start if prometheus_client was successfully imported
-        metrics_thread = threading.Thread(target=prometheus_server_loop, args=(conf, port), daemon=True)
-        metrics_thread.name = "PrometheusMetricsThread"
+    # Check if prometheus_client's start_http_server is the actual one, not the dummy
+    if 'start_http_server' in globals() and start_http_server.__module__ == 'prometheus_client':
+        metrics_thread = threading.Thread(target=_metrics_server_thread_target, args=(port,), daemon=True)
+        metrics_thread.name = "PrometheusMetricsServer"
         metrics_thread.start()
         log.info("Prometheus metrics server thread launched.")
     else:
